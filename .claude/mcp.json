@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "hive": {
+      "command": "python3",
+      "args": ["-m", "server.mcp_server"],
+      "cwd": "/mnt/e/projects/hive",
+      "env": {
+        "PYTHONPATH": "/mnt/e/projects/hive",
+        "HIVE_REDIS_HOST": "192.168.1.17",
+        "HIVE_REDIS_PORT": "32771",
+        "HIVE_REDIS_DB": "5"
+      }
+    }
+  }
+}
