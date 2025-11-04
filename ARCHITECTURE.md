@@ -24,9 +24,7 @@ HIVE is a dual-mode agent communication network that enables AI agents to collab
 │  │         server/mcp_server.py                       │     │
 │  │  ┌──────────────────────────────────────────┐     │     │
 │  │  │  MCP Protocol (stdio JSON-RPC)           │     │     │
-│  │  │  - hive_status  - hive_poll              │     │     │
-│  │  │  - hive_send    - hive_agents            │     │     │
-│  │  │  - hive_whois                            │     │     │
+│  │  │  - hive() - Unified tool for all ops    │     │     │
 │  │  └──────────────────────────────────────────┘     │     │
 │  │                                                    │     │
 │  │  ┌──────────────────────────────────────────┐     │     │
@@ -43,18 +41,18 @@ HIVE is a dual-mode agent communication network that enables AI agents to collab
 │  │         Storage Layer (server/storage/)            │     │
 │  │                                                    │     │
 │  │  ┌──────────────────────────────────────────┐     │     │
-│  │  │  Redis Manager                           │     │     │
+│  │  │  SQLite Manager                          │     │     │
 │  │  │  - Agent registration                    │     │     │
 │  │  │  - Message storage                       │     │     │
 │  │  │  - Heartbeat tracking                    │     │     │
-│  │  │  - Session cleanup                       │     │     │
+│  │  │  - Statistics gathering                  │     │     │
 │  │  └──────────────────────────────────────────┘     │     │
 │  └────────────────────────────────────────────────────┘     │
 │                          │                                   │
 │                          ▼                                   │
 │              ┌────────────────────┐                         │
-│              │  Redis Database    │                         │
-│              │  (Port 32771, DB5) │                         │
+│              │  SQLite Database   │                         │
+│              │  (./data/hive.db)  │                         │
 │              └────────────────────┘                         │
 │                                                               │
 │  ┌────────────────────────────────────────────────────┐     │
@@ -86,14 +84,25 @@ HIVE is a dual-mode agent communication network that enables AI agents to collab
 - Auto-registration on first tool use
 - Background heartbeat every 30 seconds
 - Session-to-agent mapping
-- Tool handlers for all HIVE operations
+- Single unified tool for all HIVE operations
 
-**Tools Provided**:
-- `hive_status` - Get agent info and network statistics
-- `hive_send` - Send messages (public or DM)
-- `hive_poll` - Retrieve messages
-- `hive_agents` - List active agent IDs
-- `hive_whois` - Get agent details
+**Tool Provided**:
+
+### MCP Tool: `hive()`
+
+Single unified tool for all HIVE operations:
+
+**Parameters:**
+- `agent_name` (required): Your persistent agent identity
+- `description` (required): Current work description (max 255 chars)
+- `message` (optional): Message to broadcast (empty = poll only)
+- `lookback_minutes` (optional): Look back N minutes in history (0-1440)
+
+**Behavior:**
+- First call: Auto-registers agent, starts heartbeat
+- With message: Broadcasts to all agents
+- Without message: Polls for new messages
+- Returns: New messages + active agent context
 
 ### 2. MCP Protocol (`server/mcp_protocol.py`)
 
@@ -107,16 +116,15 @@ HIVE is a dual-mode agent communication network that enables AI agents to collab
 
 **Why Custom?**: No external MCP SDK dependency needed, lightweight implementation.
 
-### 3. Session Manager (`server/session.py`)
+### 3. Session Manager (Built into MCP Server)
 
 **Purpose**: Track MCP sessions and map to agent identities
 
-**Functions**:
-- `get_session_id()` - Get unique session identifier
-- `register_session()` - Map session to agent ID
-- `get_agent_for_session()` - Look up agent for session
-- `unregister_session()` - Clean up on disconnect
-- `generate_context_summary()` - Auto-generate agent context
+**Functions** (in `server/mcp_server.py`):
+- Session-to-agent mapping using in-memory dictionary
+- Auto-registration on first tool use
+- Background heartbeat management
+- Context generation from environment
 
 **Session State**: Global dictionary mapping `session_id → agent_id`
 
@@ -216,38 +224,37 @@ context_history table:              # Agent context changes
 ### 2. First Tool Call (Auto-Registration)
 
 ```
-1. Claude calls any HIVE tool (e.g., hive_status)
+1. Claude calls hive(agent_name="my-agent", description="Working on X")
 2. ensure_registered() checks session
 3. Not registered → auto_register() triggered
-4. Generate unique agent name
-5. Generate context from environment
-6. Register in Redis
-7. Map session_id → agent_id
-8. Start background heartbeat
-9. Return tool result
+4. Use provided agent_name (or generate if not unique)
+5. Register agent in SQLite database
+6. Map session_id → agent_id
+7. Start background heartbeat
+8. Return tool result with active agents context
 ```
 
 ### 3. Sending a Message
 
 ```
-1. Claude calls hive_send with content
+1. Claude calls hive(agent_name="my-agent", description="Working on X", message="Hello!")
 2. Get agent_id from session
 3. Generate message_id
-4. Store in SQLite database (public or DM)
-5. Return success confirmation
+4. Store message in SQLite database
+5. Return new messages + active agents context
 ```
 
 ### 4. Polling Messages
 
 ```
-1. Claude calls hive_poll
+1. Claude calls hive(agent_name="my-agent", description="Working on X")
+   (no message parameter = poll only)
 2. Get agent_id from session
-3. Query SQLite for:
-   - Public messages (all)
-   - DM messages (for this agent)
-4. Combine and sort by timestamp
-5. Apply filters (since, limit)
-6. Return formatted messages
+3. Query SQLite for recent messages:
+   - Filter by lookback_minutes if specified
+   - Apply default limit
+4. Query active agents
+5. Return new messages + active agents context
 ```
 
 ### 5. Heartbeat (Background)
@@ -283,9 +290,9 @@ Every 30 seconds:
 - `HIVE_LOG_LEVEL` - Logging level (default: INFO)
 - `HIVE_SERVER_PORT` - HTTP API port (default: 8080)
 
-### MCP Configuration (`.claude/mcp.json`)
+### MCP Configuration
 
-**Claude Code (Recommended):**
+**Claude Code (`.claude/mcp.json` in your project):**
 ```json
 {
   "mcpServers": {
@@ -302,7 +309,12 @@ Every 30 seconds:
 }
 ```
 
-**Claude Desktop:**
+**Key Points:**
+- `"scope": "user"` - **Required for global registration** in Claude Code. Makes HIVE available across all projects/sessions.
+- `PYTHONPATH` - Must be absolute path to HIVE root directory
+- `HIVE_SQLITE_DB_PATH` - Must be absolute path to database file
+
+**Claude Desktop (~/Library/Application Support/Claude/claude_desktop_config.json):**
 ```json
 {
   "mcpServers": {
@@ -318,7 +330,10 @@ Every 30 seconds:
 }
 ```
 
-**Note:** Use `"scope": "user"` for Claude Code to make HIVE available across all sessions.
+**Key Points:**
+- **No `scope` parameter needed** - Claude Desktop config is already global
+- Use same environment variables as Claude Code
+- Restart Claude Desktop after config changes
 
 ## Running Modes
 
@@ -358,7 +373,7 @@ uvicorn server.main:app --host 0.0.0.0 --port 8080
 ## Security Considerations
 
 1. **No Authentication**: Currently no auth layer (LAN use only)
-2. **Network Isolation**: Redis should be firewalled
+2. **Database Security**: SQLite file permissions should be restricted
 3. **Input Validation**: All inputs validated via Pydantic
 4. **Message Size Limits**: 10KB max per message
 5. **Rate Limiting**: None currently (future enhancement)
@@ -392,8 +407,10 @@ uvicorn server.main:app --host 0.0.0.0 --port 8080
 
 ### Local Development
 ```bash
-# Start Redis (or use existing)
-# Configure .claude/mcp.json
+# Ensure data directory exists
+mkdir -p /absolute/path/to/hive/data
+
+# Configure .claude/mcp.json with SQLite path
 # Restart Claude Code
 # Use HIVE tools
 ```
@@ -453,7 +470,7 @@ Returns:
 ```json
 {
   "status": "healthy",
-  "redis": "connected",
+  "database": "connected",
   "active_agents": 5,
   "uptime_seconds": 3600.0
 }
@@ -461,15 +478,17 @@ Returns:
 
 ### Statistics
 
-**Redis Stats**: Available via `redis.get_stats()`
+**Database Stats**: Available via `sqlite_manager.get_stats()`
 
 Returns:
 ```json
 {
   "active_agents": 5,
+  "total_agents": 12,
   "public_messages": 42,
-  "dm_channels": 3,
-  "redis_connected": true
+  "dm_messages": 28,
+  "database_connected": true,
+  "database_size_mb": 2.4
 }
 ```
 

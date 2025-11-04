@@ -13,7 +13,7 @@ from shared.models import (
     ListAgentsResponse,
     WhoisResponse
 )
-from server.storage.redis_manager import get_redis_manager
+from server.storage.sqlite_manager import get_sqlite_manager
 from server.models.agent import generate_agent_name
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ async def register_agent(request: RegisterRequest):
     Returns:
         RegisterResponse: Agent ID and registration status
     """
-    redis = get_redis_manager()
+    db = await get_sqlite_manager()
 
     # Generate unique agent name
     max_attempts = 100
@@ -39,7 +39,7 @@ async def register_agent(request: RegisterRequest):
 
     for _ in range(max_attempts):
         candidate_name = generate_agent_name()
-        if not redis.agent_name_exists(candidate_name):
+        if not await db.agent_name_exists(candidate_name):
             agent_id = candidate_name
             break
 
@@ -50,14 +50,14 @@ async def register_agent(request: RegisterRequest):
             detail="Failed to generate unique agent name"
         )
 
-    # Register agent in Redis
-    success = redis.register_agent(
+    # Register agent in database
+    success = await db.register_agent(
         agent_id=agent_id,
         context_summary=request.context_summary
     )
 
     if not success:
-        logger.error(f"Failed to register agent in Redis: {agent_id}")
+        logger.error(f"Failed to register agent in database: {agent_id}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to register agent"
@@ -83,9 +83,9 @@ async def update_heartbeat(agent_id: str):
     Returns:
         dict: Success status
     """
-    redis = get_redis_manager()
+    db = await get_sqlite_manager()
 
-    success = redis.update_heartbeat(agent_id)
+    success = await db.update_heartbeat(agent_id)
 
     if not success:
         raise HTTPException(
@@ -108,20 +108,24 @@ async def update_context(agent_id: str, request: UpdateContextRequest):
     Returns:
         UpdateContextResponse: Update status and timestamp
     """
-    redis = get_redis_manager()
+    db = await get_sqlite_manager()
 
     # Check if agent exists
-    agent_data = redis.get_agent(agent_id)
+    agent_data = await db.get_agent(agent_id)
     if not agent_data:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Agent not found: {agent_id}"
         )
 
-    # Update context in Redis
-    agent_key = f"hive:agent:{agent_id}"
+    # Update context in database
     try:
-        redis.redis.hset(agent_key, "context_summary", request.context_summary)
+        conn = await db.get_connection()
+        await conn.execute(
+            "UPDATE agents SET context_summary = ? WHERE agent_id = ?",
+            (request.context_summary, agent_id)
+        )
+        await conn.commit()
     except Exception as e:
         logger.error(f"Failed to update context for {agent_id}: {e}")
         raise HTTPException(
@@ -146,9 +150,9 @@ async def list_agents():
     Returns:
         ListAgentsResponse: List of agent IDs and count
     """
-    redis = get_redis_manager()
+    db = await get_sqlite_manager()
 
-    agent_ids = redis.list_agents(include_stale=False)
+    agent_ids = await db.list_agents(include_stale=False)
 
     return ListAgentsResponse(
         agents=agent_ids,
@@ -164,9 +168,9 @@ async def whois_all():
     Returns:
         WhoisResponse: List of agent details
     """
-    redis = get_redis_manager()
+    db = await get_sqlite_manager()
 
-    agents_data = redis.get_all_agents_details(include_stale=False)
+    agents_data = await db.get_all_agents_details(include_stale=False)
 
     agents = []
     for agent_data in agents_data:
@@ -197,9 +201,9 @@ async def get_agent(agent_id: str):
     Returns:
         Agent: Agent details
     """
-    redis = get_redis_manager()
+    db = await get_sqlite_manager()
 
-    agent_data = redis.get_agent(agent_id)
+    agent_data = await db.get_agent(agent_id)
 
     if not agent_data:
         raise HTTPException(

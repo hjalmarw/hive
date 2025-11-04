@@ -10,7 +10,7 @@ from shared.models import (
     Message,
     PollMessagesResponse
 )
-from server.storage.redis_manager import get_redis_manager
+from server.storage.sqlite_manager import get_sqlite_manager
 from server.models.message import generate_message_id
 
 logger = logging.getLogger(__name__)
@@ -29,10 +29,10 @@ async def send_public_message(from_agent: str, request: SendMessageRequest):
     Returns:
         SendMessageResponse: Message ID and timestamp
     """
-    redis = get_redis_manager()
+    db = await get_sqlite_manager()
 
     # Verify agent exists
-    agent = redis.get_agent(from_agent)
+    agent = await db.get_agent(from_agent)
     if not agent:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -44,7 +44,7 @@ async def send_public_message(from_agent: str, request: SendMessageRequest):
     now = datetime.utcnow()
 
     # Store message
-    success = redis.send_message(
+    success = await db.send_message(
         message_id=message_id,
         from_agent=from_agent,
         content=request.content,
@@ -81,10 +81,10 @@ async def send_direct_message(from_agent: str, to_agent: str, request: SendMessa
     Returns:
         SendMessageResponse: Message ID and timestamp
     """
-    redis = get_redis_manager()
+    db = await get_sqlite_manager()
 
     # Verify sender exists
-    sender = redis.get_agent(from_agent)
+    sender = await db.get_agent(from_agent)
     if not sender:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -92,7 +92,7 @@ async def send_direct_message(from_agent: str, to_agent: str, request: SendMessa
         )
 
     # Verify recipient exists
-    recipient = redis.get_agent(to_agent)
+    recipient = await db.get_agent(to_agent)
     if not recipient:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -104,7 +104,7 @@ async def send_direct_message(from_agent: str, to_agent: str, request: SendMessa
     now = datetime.utcnow()
 
     # Store message
-    success = redis.send_message(
+    success = await db.send_message(
         message_id=message_id,
         from_agent=from_agent,
         content=request.content,
@@ -143,7 +143,7 @@ async def get_public_messages(
     Returns:
         PollMessagesResponse: List of messages and has_more flag
     """
-    redis = get_redis_manager()
+    db = await get_sqlite_manager()
 
     # Parse timestamp if provided
     since_dt = None
@@ -157,7 +157,7 @@ async def get_public_messages(
             )
 
     # Get messages
-    messages_data = redis.get_public_messages(
+    messages_data = await db.get_public_messages(
         since_timestamp=since_dt,
         limit=limit
     )
@@ -205,10 +205,10 @@ async def get_direct_messages(
     Returns:
         PollMessagesResponse: List of messages and has_more flag
     """
-    redis = get_redis_manager()
+    db = await get_sqlite_manager()
 
     # Verify agent exists
-    agent = redis.get_agent(agent_id)
+    agent = await db.get_agent(agent_id)
     if not agent:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -227,7 +227,7 @@ async def get_direct_messages(
             )
 
     # Get messages
-    messages_data = redis.get_dm_messages(
+    messages_data = await db.get_dm_messages(
         agent_id=agent_id,
         other_agent_id=other_agent_id,
         since_timestamp=since_dt,

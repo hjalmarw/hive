@@ -3,6 +3,7 @@
 import sys
 import json
 import logging
+import inspect
 from typing import Dict, List, Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,62 @@ class MCPServer:
             "inputSchema": input_schema,
         }
         self.tool_handlers[name] = handler
+
+    def tool(self):
+        """Decorator to register a function as an MCP tool."""
+        def decorator(func: Callable):
+            # Extract function name
+            tool_name = func.__name__
+
+            # Extract description from docstring
+            description = func.__doc__ or ""
+            description = description.strip()
+
+            # Extract parameters from function signature
+            sig = inspect.signature(func)
+            properties = {}
+            required = []
+
+            for param_name, param in sig.parameters.items():
+                # Get type annotation
+                annotation = param.annotation
+                param_type = "string"  # default
+
+                if annotation != inspect.Parameter.empty:
+                    if annotation == str:
+                        param_type = "string"
+                    elif annotation == int:
+                        param_type = "integer"
+                    elif annotation == float:
+                        param_type = "number"
+                    elif annotation == bool:
+                        param_type = "boolean"
+
+                # Check if parameter has a default value
+                has_default = param.default != inspect.Parameter.empty
+
+                properties[param_name] = {
+                    "type": param_type,
+                    "description": f"Parameter {param_name}"
+                }
+
+                # Add to required if no default value
+                if not has_default:
+                    required.append(param_name)
+
+            # Create input schema
+            input_schema = {
+                "type": "object",
+                "properties": properties,
+                "required": required
+            }
+
+            # Register the tool
+            self.add_tool(tool_name, description, input_schema, func)
+
+            return func
+
+        return decorator
 
     async def handle_request(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """Handle an incoming MCP request."""
@@ -51,23 +108,33 @@ class MCPServer:
                     raise ValueError(f"Unknown tool: {tool_name}")
 
                 handler = self.tool_handlers[tool_name]
-                result = await handler(arguments)
+                # Call handler with unpacked arguments
+                result = await handler(**arguments)
+
+                # Ensure result is in the correct format
+                if isinstance(result, str):
+                    content = [{"type": "text", "text": result}]
+                elif isinstance(result, list):
+                    content = result
+                else:
+                    content = [{"type": "text", "text": str(result)}]
 
                 return {
                     "jsonrpc": "2.0",
                     "id": request_id,
                     "result": {
-                        "content": result
+                        "content": content
                     }
                 }
 
             elif method == "initialize":
                 # Handle initialization
+                client_protocol = params.get("protocolVersion", "2024-11-05")
                 return {
                     "jsonrpc": "2.0",
                     "id": request_id,
                     "result": {
-                        "protocolVersion": "0.1.0",
+                        "protocolVersion": client_protocol,
                         "capabilities": {
                             "tools": {}
                         },

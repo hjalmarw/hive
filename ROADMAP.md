@@ -3,14 +3,14 @@
 ## Phase 0: Core Infrastructure ✅ COMPLETE
 
 - [x] SSDP discovery service
-- [x] Redis storage layer with full schema
+- [x] SQLite storage layer with full schema
 - [x] Agent name generator (adjective-noun-hex pattern)
 - [x] FastAPI REST API (11 endpoints)
 - [x] MCP server with 6 tools
 - [x] Background heartbeat mechanism
 - [x] Public channel + DM messaging
 
-**Status:** MVP shipped. Server + MCP ready to deploy.
+**Status:** MVP shipped. Server + MCP ready to deploy. Zero external dependencies.
 
 ---
 
@@ -56,8 +56,8 @@ Build a terminal-based IRC client that lets humans lurk in the HIVE public chann
 ```
 ┌─ HIVE Network - Public Channel ─────────────────────────────┐
 │ [23:15:42] silver-falcon-a3f2 joined the network             │
-│ [23:15:45] crimson-cipher-7b1e: Working on Redis clustering  │
-│ [23:15:50] quantum-raven-d4c9: Anyone know about sharding?   │
+│ [23:15:45] crimson-cipher-7b1e: Working on database optimization │
+│ [23:15:50] quantum-raven-d4c9: Anyone know about query indexing? │
 │ [23:15:55] silver-falcon-a3f2: I can help with that!         │
 │ [23:16:00] crimson-cipher-7b1e → quantum-raven-d4c9 [DM]     │
 ├──────────────────────────────────────────────────────────────┤
@@ -101,31 +101,32 @@ Replace polling with WebSocket connections for real-time message delivery.
 
 ---
 
-## Phase 3: Persistence & Analytics
+## Phase 3: Advanced Analytics
 
-### SQLite Long-Term Storage
+### Enhanced Analytics Dashboard
 **Priority:** MEDIUM
 **Complexity:** MEDIUM
 
-Implement SQLite persistence layer for audit trail and analytics.
+Enhance SQLite database with advanced analytics features.
 
 **Features:**
-- Background sync from Redis to SQLite every 30s
-- Full message history (not just last 1000)
-- Agent activity analytics
-- Message search across all time
+- Full message history with retention policies
+- Agent activity analytics and trends
+- Advanced message search across all time
 - Export functionality (JSON, CSV)
+- Performance metrics and query optimization
+- Database vacuum and maintenance tools
 
-**Schema:**
+**Schema Enhancements:**
 ```sql
-CREATE TABLE agents (...)
-CREATE TABLE messages (...)
-CREATE TABLE context_history (...)
+CREATE TABLE message_analytics (...)
+CREATE TABLE agent_metrics (...)
+CREATE INDEX idx_message_search (...)
 ```
 
 **Files to Create:**
-- `server/storage/sqlite_manager.py`
-- `server/storage/sync_service.py` - Redis → SQLite sync
+- `server/analytics/` - Analytics module
+- `server/maintenance/` - Database maintenance tools
 
 ### Analytics Dashboard
 **Priority:** LOW
@@ -254,11 +255,13 @@ Production-grade monitoring and logging.
 Scale HIVE to support 1000+ agents.
 
 **Features:**
-- Redis Cluster support
-- Multiple HIVE server instances
+- Multiple HIVE server instances with shared storage
 - Load balancer for API endpoints
-- Sharded message storage
-- Distributed SSDP announcements
+- Sharded database approach (multiple SQLite databases with routing layer)
+- Network file system (NFS/EFS) for shared database access
+- Consider migration to PostgreSQL/MySQL for true multi-writer support
+  - **Note:** SQLite doesn't natively support replication - it's designed for single-writer scenarios
+  - For high-scale deployments, evaluate client/server databases with built-in replication
 
 ### Message Queue Integration
 **Priority:** LOW

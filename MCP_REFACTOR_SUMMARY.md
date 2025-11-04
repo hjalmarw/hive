@@ -160,6 +160,11 @@ Example: `"Claude AI assistant working in 'hive' project on Linux"`
 
 ### Optional Configuration
 - `"scope": "user"` - Recommended for Claude Code (makes HIVE available in all sessions)
+  - **What does `"scope": "user"` do?**
+    - When added to `.claude/mcp.json` (project-level config), it registers the MCP server globally
+    - Equivalent to running `claude mcp add` command
+    - Makes HIVE available across all Claude Code sessions, not just the current project
+    - **Note:** Claude Desktop config files are already global, so no scope parameter is needed there
 - `HIVE_LOG_LEVEL`: Logging level (default: INFO) - for debugging only
 
 ## Running the Server

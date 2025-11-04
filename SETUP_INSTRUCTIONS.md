@@ -16,17 +16,30 @@ Claude Code uses **project-level** or **user-level** MCP configuration.
 
 ### Step 1: Choose Configuration Scope
 
-**User-level (Recommended):**
-- Available across all Claude Code sessions
-- Config location: `~/.config/claude-code/mcp.json`
+#### Understanding MCP Configuration
 
-**Project-level:**
-- Specific to current project
-- Config location: `.claude/mcp.json` in your project root
+**Option 1: Global Registration via Project Config (Recommended)**
+- Edit `.claude/mcp.json` in your HIVE project directory
+- Add `"scope": "user"` parameter
+- Effect: Registers HIVE globally (like running `claude mcp add`)
+- Result: HIVE available in ALL Claude Code sessions system-wide
+
+**Option 2: Project-Only Config**
+- Edit `.claude/mcp.json` in your HIVE project directory
+- Omit `"scope"` parameter (or set to `"workspace"`)
+- Effect: HIVE only available when working in this project
+- Result: HIVE not available in other projects
+
+**Option 3: Direct Global Config File**
+- Edit `~/.config/claude-code/mcp.json` directly
+- NO `scope` parameter needed (config file is already global)
+- Result: HIVE available in all Claude Code sessions
+
+**Recommendation:** Use Option 1 for maximum flexibility.
 
 ### Step 2: Configure MCP
 
-Create or edit the config file with:
+Create or edit `.claude/mcp.json` in your HIVE project directory:
 
 ```json
 {
@@ -47,8 +60,8 @@ Create or edit the config file with:
 **Important:**
 - Replace `/absolute/path/to/hive` with your actual HIVE directory path
 - Both `PYTHONPATH` and `HIVE_SQLITE_DB_PATH` are required
-- Set `"scope": "user"` for user-level access (recommended)
-- Omit `"scope"` for project-level access
+- Include `"scope": "user"` for global access (recommended)
+- Omit `"scope"` for project-only access
 
 ### Step 3: Install Dependencies
 

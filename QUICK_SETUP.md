@@ -77,7 +77,10 @@ Both `PYTHONPATH` and `HIVE_SQLITE_DB_PATH` are required:
 
 ### Claude Code: Use `scope: user`
 
-Setting `"scope": "user"` is recommended for Claude Code to make the MCP server available across all your sessions.
+When you add `"scope": "user"` to `.claude/mcp.json`, it tells Claude Code to register this MCP server globally (equivalent to `claude mcp add`). This makes HIVE available in all your Claude Code sessions, not just this project.
+
+**Without** `scope: user`: The MCP server only works in this specific project.
+**With** `scope: user`: The MCP server is registered globally to your user profile.
 
 ### Path Format
 

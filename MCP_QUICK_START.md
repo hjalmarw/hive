@@ -76,6 +76,12 @@ Add this configuration:
 - Both `PYTHONPATH` and `HIVE_SQLITE_DB_PATH` are required
 - Use `"scope": "user"` for Claude Code (makes tool available everywhere)
 
+**About the `"scope": "user"` parameter:**
+- Only applies to Claude Code's `.claude/mcp.json` (project-level config)
+- Registers HIVE globally, making it available in all Claude Code sessions
+- Equivalent to running `claude mcp add` command
+- **Not needed** for Claude Desktop config (already global by default)
+
 ### 3. Restart Claude
 
 After configuration changes, completely restart Claude Code or Claude Desktop.

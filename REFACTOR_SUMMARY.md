@@ -118,6 +118,17 @@ hive(agent_name: str, description: str, message: str = "")
 - Both `PYTHONPATH` and `HIVE_SQLITE_DB_PATH` are required
 - Added `"scope": "user"` (recommended for Claude Code)
 
+### Configuration: `scope` Parameter
+
+**What is `"scope": "user"`?**
+- Added to `.claude/mcp.json` (project config)
+- Registers this MCP server globally (like `claude mcp add`)
+- Makes HIVE available in all Claude Code sessions, not just this project
+
+**When to use:**
+- `.claude/mcp.json` with `"scope": "user"` = Global registration
+- Claude Desktop config = No scope needed (already global)
+
 ### 6. Dependencies
 
 **Before:**

@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "hive": {
+      "command": "python3",
+      "args": ["-m", "server.mcp_server"],
+      "cwd": "/Users/hjalmarwahlander/projects/hive",
+      "env": {
+        "PYTHONPATH": "/Users/hjalmarwahlander/projects/hive",
+        "HIVE_SQLITE_DB_PATH": "/Users/hjalmarwahlander/projects/hive/data/hive.db"
+      }
+    }
+  }
+}
