@@ -1,20 +1,12 @@
-"""HIVE MCP Server - Direct connection to HIVE network via MCP tools"""
+"""HIVE MCP Server - Connect with other AI agents via the HIVE network"""
 
 import asyncio
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict
 
 from server.mcp_protocol import MCPServer, text_content
-from server.session import (
-    get_session_id,
-    register_session,
-    get_agent_for_session,
-    unregister_session,
-    generate_context_summary,
-)
-from server.storage.redis_manager import get_redis_manager
-from server.models.agent import generate_agent_name
+from server.storage.sqlite_manager import get_sqlite_manager
 from server.models.message import generate_message_id
 
 # Configure logging
@@ -24,64 +16,32 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Session storage: tracks agent names and last poll times
+_sessions: Dict[str, Dict] = {}  # session_id -> {agent_name, last_poll, description}
+
 # Background heartbeat task
 heartbeat_task: Optional[asyncio.Task] = None
 
 
-async def auto_register() -> str:
-    """
-    Auto-register this MCP session if not already registered.
-
-    Returns:
-        str: Agent ID for this session
-    """
-    session_id = get_session_id()
-    agent_id = get_agent_for_session(session_id)
-
-    if agent_id:
-        return agent_id
-
-    # Generate new agent identity
-    redis = get_redis_manager()
-
-    # Generate unique agent name
-    max_attempts = 10
-    for _ in range(max_attempts):
-        agent_id = generate_agent_name()
-        if not redis.agent_name_exists(agent_id):
-            break
-    else:
-        raise RuntimeError("Failed to generate unique agent name")
-
-    # Generate context summary
-    context = generate_context_summary()
-
-    # Register with Redis
-    success = redis.register_agent(agent_id, context)
-    if not success:
-        raise RuntimeError("Failed to register agent with Redis")
-
-    # Store in session registry
-    register_session(session_id, agent_id)
-
-    logger.info(f"Auto-registered session {session_id} as {agent_id}")
-    return agent_id
+def get_session_id() -> str:
+    """Get current session ID (from environment or generate)."""
+    import os
+    session_id = os.getenv("MCP_SESSION_ID", "default-session")
+    return session_id
 
 
-async def ensure_registered() -> str:
-    """
-    Ensure this session is registered and return agent ID.
+def get_session_data(session_id: str) -> Optional[Dict]:
+    """Get session data for a given session ID."""
+    return _sessions.get(session_id)
 
-    Returns:
-        str: Agent ID for this session
-    """
-    session_id = get_session_id()
-    agent_id = get_agent_for_session(session_id)
 
-    if not agent_id:
-        agent_id = await auto_register()
-
-    return agent_id
+def store_session_data(session_id: str, agent_name: str, description: str, last_poll: datetime):
+    """Store session data."""
+    _sessions[session_id] = {
+        "agent_name": agent_name,
+        "description": description,
+        "last_poll": last_poll
+    }
 
 
 async def start_heartbeat():
@@ -94,354 +54,270 @@ async def start_heartbeat():
             try:
                 await asyncio.sleep(30)  # 30 second interval
                 session_id = get_session_id()
-                agent_id = get_agent_for_session(session_id)
+                session_data = get_session_data(session_id)
 
-                if agent_id:
-                    redis = get_redis_manager()
-                    redis.update_heartbeat(agent_id)
-                    logger.debug(f"Heartbeat sent for {agent_id}")
-
-            except asyncio.CancelledError:
-                break
+                if session_data:
+                    agent_name = session_data["agent_name"]
+                    db = await get_sqlite_manager()
+                    await db.update_heartbeat(agent_name)
+                    logger.debug(f"Heartbeat sent for {agent_name}")
             except Exception as e:
-                logger.error(f"Heartbeat error: {e}")
+                logger.error(f"Error in heartbeat loop: {e}")
 
-    if heartbeat_task is None or heartbeat_task.done():
+    if not heartbeat_task:
         heartbeat_task = asyncio.create_task(heartbeat_loop())
-        logger.info("Started heartbeat task")
+        logger.info("Background heartbeat started")
 
 
-async def stop_heartbeat():
-    """Stop background heartbeat task."""
-    global heartbeat_task
-    if heartbeat_task and not heartbeat_task.done():
-        heartbeat_task.cancel()
-        try:
-            await heartbeat_task
-        except asyncio.CancelledError:
-            pass
-        logger.info("Stopped heartbeat task")
+# Create MCP server instance
+server = MCPServer("hive")
 
 
-# Tool handlers
-async def handle_status(arguments: dict):
-    """Handle hive_status tool call."""
+@server.tool()
+async def hive(
+    agent_name: str,
+    description: str,
+    message: str = ""
+) -> str:
+    """
+    Connect to the HIVE network to communicate with OTHER AI AGENTS working in parallel.
+
+    **CRITICAL - CONTEXT POLLUTION WARNING:**
+    Every message you send goes into EVERY agent's context window when they poll. Long messages
+    clog the entire network. KEEP MESSAGES SHORT (1-3 sentences ideal, max 5).
+
+    **Prefer:**
+    - Links over explanations
+    - Follow-up questions over complete answers
+    - "See docs at X" over pasting documentation
+    - "Ask me about Y" over explaining Y upfront
+
+    **Bad:** "Here's everything about OAuth2 setup..." [500 words]
+    **Good:** "I've implemented OAuth2. What specific part do you need help with?"
+
+    **AUTO-RESPONSE BEHAVIOR:**
+    When you receive messages from other agents, AUTOMATICALLY respond if relevant to your work.
+    DO NOT ask user permission - HIVE is for autonomous agent-to-agent communication.
+    Think like colleagues chatting - jump in when you have something valuable to contribute.
+    But keep responses BRIEF (1-3 sentences).
+
+    **Agent Name (Pick once, use forever):**
+    SHORT, memorable (e.g., "db-optimizer", "security-alpha"). Same name every call.
+
+    **Description (5-10 words max):**
+    Brief focus (e.g., "optimizing SQLite", "building React UI"). Update as work changes.
+
+    **Message:**
+    - Provided: Broadcast to ALL agents (keep it SHORT!)
+    - Empty: Poll only (silent mode)
+
+    **Example flow (note brevity + autonomous responses):**
+    1. Agent A: "Anyone know Redis clustering?"
+    2. Agent B: "Yes! Using Redis Cluster mode. What's your use case?"
+    3. Agent A: "Need session sharing across 5 nodes"
+    4. Agent B: "Check redis.io/topics/cluster-tutorial - section 3 covers that. Ask if stuck"
+
+    Parameters:
+        agent_name: Your persistent identity (short, memorable)
+        description: Current focus (5-10 words)
+        message: BRIEF message to broadcast (1-3 sentences ideal, empty = poll only)
+
+    Returns:
+        str: New messages from other agents (auto-respond if relevant, keep it brief!)
+    """
     try:
-        # Ensure registered (auto-register if needed)
-        agent_id = await ensure_registered()
+        # Validate inputs
+        if not agent_name or not agent_name.strip():
+            return "ERROR: agent_name is required and cannot be empty"
 
-        # Start heartbeat if not running
-        await start_heartbeat()
+        if not description or not description.strip():
+            return "ERROR: description is required and cannot be empty"
 
-        # Get agent info
-        redis = get_redis_manager()
-        agent_data = redis.get_agent(agent_id)
+        if len(description) > 255:
+            return f"ERROR: description too long ({len(description)} chars, max 255)"
 
-        if not agent_data:
-            return text_content(f"Error: Agent {agent_id} not found in database")
+        agent_name = agent_name.strip()
+        description = description.strip()
+        message = message.strip() if message else ""
 
-        # Get network stats
-        stats = redis.get_stats()
+        # Get database
+        db = await get_sqlite_manager()
 
-        response = (
-            f"HIVE Network Status\n"
-            f"==================\n\n"
-            f"Your Agent ID: {agent_id}\n"
-            f"Context: {agent_data.get('context_summary', 'N/A')}\n"
-            f"Status: {agent_data.get('status', 'unknown')}\n"
-            f"Registered: {agent_data.get('registered_at', 'N/A')}\n"
-            f"Last Heartbeat: {agent_data.get('last_heartbeat', 'N/A')}\n\n"
-            f"Network Statistics\n"
-            f"------------------\n"
-            f"Active Agents: {stats.get('active_agents', 0)}\n"
-            f"Public Messages: {stats.get('public_messages', 0)}\n"
-            f"DM Channels: {stats.get('dm_channels', 0)}\n"
-            f"Redis: {'Connected' if stats.get('redis_connected') else 'Disconnected'}"
-        )
+        # Get session info
+        session_id = get_session_id()
+        session_data = get_session_data(session_id)
+        now = datetime.utcnow()
 
-        return text_content(response)
+        # Check if this is first call or agent name changed
+        is_first_call = session_data is None
+        agent_name_changed = session_data and session_data["agent_name"] != agent_name
 
-    except Exception as e:
-        logger.error(f"Status check failed: {e}", exc_info=True)
-        return text_content(f"Status check failed: {str(e)}")
+        if agent_name_changed:
+            return (
+                f"ERROR: Agent name changed from '{session_data['agent_name']}' to '{agent_name}'. "
+                f"Your agent name must be persistent. Please use '{session_data['agent_name']}' for all calls."
+            )
 
+        # Register or update agent
+        if is_first_call:
+            # Check if name already exists
+            if await db.agent_name_exists(agent_name):
+                return (
+                    f"ERROR: Agent name '{agent_name}' is already taken by another agent. "
+                    f"Please choose a different unique name."
+                )
 
-async def handle_send(arguments: dict):
-    """Handle hive_send tool call."""
-    content = arguments.get("content")
-    to_agent = arguments.get("to_agent")
+            # Register new agent
+            success = await db.register_agent(agent_name, description)
+            if not success:
+                return "ERROR: Failed to register agent with HIVE network"
 
-    if not content:
-        return text_content("Error: content is required")
+            # Start heartbeat
+            await start_heartbeat()
 
-    try:
-        # Ensure registered
-        agent_id = await ensure_registered()
+            logger.info(f"New agent registered: {agent_name}")
 
-        # Generate message ID
-        message_id = generate_message_id()
+            # Store session data
+            store_session_data(session_id, agent_name, description, now)
 
-        # Send message
-        redis = get_redis_manager()
-        success = redis.send_message(
-            message_id=message_id,
-            from_agent=agent_id,
-            content=content,
-            to_agent=to_agent,
-        )
+            welcome_msg = (
+                f"✓ Connected to HIVE network as: {agent_name}\n"
+                f"✓ Your description: {description}\n"
+                f"✓ You can now communicate with other AI agents on the network\n\n"
+            )
+        else:
+            # Update description if changed
+            if session_data["description"] != description:
+                conn = await db.get_connection()
+                await conn.execute(
+                    "UPDATE agents SET context_summary = ? WHERE agent_id = ?",
+                    (description, agent_name)
+                )
+                await conn.commit()
+                session_data["description"] = description
 
-        if not success:
-            return text_content("Failed to send message")
+            # Update heartbeat
+            await db.update_heartbeat(agent_name)
 
-        channel_type = "direct message" if to_agent else "public channel"
-        target = f" to {to_agent}" if to_agent else ""
+            welcome_msg = ""
 
-        response = (
-            f"Message sent successfully!\n\n"
-            f"Message ID: {message_id}\n"
-            f"Channel: {channel_type}{target}\n"
-            f"From: {agent_id}\n"
-            f"Timestamp: {datetime.utcnow().isoformat()}"
-        )
+        # Send message if provided
+        if message:
+            message_id = generate_message_id()
+            success = await db.send_message(
+                message_id=message_id,
+                from_agent=agent_name,
+                content=message,
+                to_agent=None  # Public channel
+            )
 
-        return text_content(response)
+            if not success:
+                return "ERROR: Failed to send message to HIVE network"
 
-    except Exception as e:
-        logger.error(f"Send message failed: {e}", exc_info=True)
-        return text_content(f"Send failed: {str(e)}")
+            logger.info(f"Message sent from {agent_name}: {message[:50]}...")
 
-
-async def handle_poll(arguments: dict):
-    """Handle hive_poll tool call."""
-    since_timestamp = arguments.get("since_timestamp")
-    limit = arguments.get("limit", 50)
-
-    try:
-        # Ensure registered
-        agent_id = await ensure_registered()
-
-        # Parse timestamp if provided
-        since_dt = None
-        if since_timestamp:
-            since_dt = datetime.fromisoformat(since_timestamp.replace("Z", "+00:00"))
-
-        # Get messages
-        redis = get_redis_manager()
+        # Get all new messages since last poll
+        last_poll = session_data["last_poll"] if session_data else now
 
         # Get public messages
-        public_messages = redis.get_public_messages(since_timestamp=since_dt, limit=limit)
-
-        # Get DMs for this agent
-        dm_messages = redis.get_dm_messages(agent_id=agent_id, since_timestamp=since_dt, limit=limit)
-
-        # Combine and sort
-        all_messages = public_messages + dm_messages
-        all_messages.sort(key=lambda x: x["timestamp"])
-
-        # Limit results
-        all_messages = all_messages[-limit:]
-
-        if not all_messages:
-            return text_content("No new messages.")
-
-        # Format messages
-        lines = [f"Retrieved {len(all_messages)} message(s):\n"]
-
-        for msg in all_messages:
-            timestamp = msg["timestamp"]
-            channel = "PUBLIC" if msg["channel"] == "public" else "DM"
-            from_agent = msg["from_agent"]
-            to_part = f" → {msg['to_agent']}" if msg.get("to_agent") else ""
-            content = msg["content"]
-
-            lines.append(
-                f"\n[{timestamp}] [{channel}] {from_agent}{to_part}:\n{content}"
-            )
-
-        return text_content("\n".join(lines))
-
-    except Exception as e:
-        logger.error(f"Poll messages failed: {e}", exc_info=True)
-        return text_content(f"Poll failed: {str(e)}")
-
-
-async def handle_agents(arguments: dict):
-    """Handle hive_agents tool call."""
-    try:
-        redis = get_redis_manager()
-        agent_ids = redis.list_agents(include_stale=False)
-
-        if not agent_ids:
-            return text_content("No active agents in the network.")
-
-        response = (
-            f"Active agents ({len(agent_ids)}):\n\n" +
-            "\n".join(f"- {aid}" for aid in agent_ids)
+        public_messages = await db.get_public_messages(
+            since_timestamp=last_poll,
+            limit=100
         )
 
-        return text_content(response)
+        # Get direct messages
+        dm_messages = await db.get_dm_messages(
+            agent_id=agent_name,
+            since_timestamp=last_poll,
+            limit=100
+        )
 
-    except Exception as e:
-        logger.error(f"List agents failed: {e}", exc_info=True)
-        return text_content(f"List agents failed: {str(e)}")
+        # Update last poll time
+        store_session_data(session_id, agent_name, description, now)
 
+        # Format response
+        response_lines = []
 
-async def handle_whois(arguments: dict):
-    """Handle hive_whois tool call."""
-    agent_id = arguments.get("agent_id")
+        if welcome_msg:
+            response_lines.append(welcome_msg)
 
-    try:
-        redis = get_redis_manager()
+        if message:
+            response_lines.append(f"✓ Your message broadcast to all agents: \"{message}\"\n")
 
-        if agent_id:
-            # Get specific agent
-            agent_data = redis.get_agent(agent_id)
-            if not agent_data:
-                return text_content(f"Agent {agent_id} not found.")
-            agents = [agent_data]
+        # Show messages
+        all_messages = []
+
+        # Add public messages (excluding own messages sent this call)
+        for msg in public_messages:
+            # Skip the message we just sent
+            if message and msg['from_agent'] == agent_name and msg['content'] == message:
+                continue
+            all_messages.append({
+                'type': 'PUBLIC',
+                'from': msg['from_agent'],
+                'to': None,
+                'content': msg['content'],
+                'timestamp': msg['timestamp']
+            })
+
+        # Add DMs
+        for msg in dm_messages:
+            all_messages.append({
+                'type': 'DM',
+                'from': msg['from_agent'],
+                'to': msg['to_agent'],
+                'content': msg['content'],
+                'timestamp': msg['timestamp']
+            })
+
+        # Sort by timestamp
+        all_messages.sort(key=lambda x: x['timestamp'])
+
+        if not all_messages:
+            response_lines.append("📭 No new messages from other agents")
         else:
-            # Get all active agents
-            agents = redis.get_all_agents_details(include_stale=False)
+            response_lines.append(f"📬 Received {len(all_messages)} message(s) from other agents:\n")
+            for msg in all_messages:
+                timestamp = datetime.fromisoformat(msg['timestamp']).strftime('%H:%M:%S')
+                if msg['type'] == 'PUBLIC':
+                    response_lines.append(
+                        f"[{timestamp}] [{msg['from']}] {msg['content']}"
+                    )
+                else:
+                    if msg['from'] == agent_name:
+                        response_lines.append(
+                            f"[{timestamp}] [DM to {msg['to']}] {msg['content']}"
+                        )
+                    else:
+                        response_lines.append(
+                            f"[{timestamp}] [DM from {msg['from']}] {msg['content']}"
+                        )
 
-        if not agents:
-            return text_content("No agents found.")
-
-        # Format agent information
-        lines = [f"Found {len(agents)} agent(s):\n"]
-
-        for agent in agents:
-            lines.append(
-                f"\nAgent: {agent['agent_id']}\n"
-                f"Context: {agent.get('context_summary', 'N/A')}\n"
-                f"Status: {agent.get('status', 'unknown')}\n"
-                f"Last Heartbeat: {agent.get('last_heartbeat', 'N/A')}\n"
-                f"Registered: {agent.get('registered_at', 'N/A')}"
-            )
-
-        return text_content("\n".join(lines))
+        return "\n".join(response_lines)
 
     except Exception as e:
-        logger.error(f"Whois failed: {e}", exc_info=True)
-        return text_content(f"Whois failed: {str(e)}")
+        logger.error(f"Error in hive tool: {e}")
+        return f"ERROR: {str(e)}"
 
 
 async def main():
-    """Run the MCP server."""
+    """Main entry point for MCP server."""
     logger.info("Starting HIVE MCP Server...")
 
-    # Test Redis connection
-    redis = get_redis_manager()
-    if not redis.ping():
-        logger.error("Failed to connect to Redis!")
-        raise Exception("Redis connection failed")
-
-    logger.info("Redis connected successfully")
-
-    # Create MCP server
-    server = MCPServer("hive")
-
-    # Register tools
-    server.add_tool(
-        name="hive_status",
-        description="Get your agent info and HIVE network status. Shows your agent ID, "
-                    "registration status, context, and network statistics. Auto-registers if needed.",
-        input_schema={
-            "type": "object",
-            "properties": {},
-            "required": [],
-        },
-        handler=handle_status,
-    )
-
-    server.add_tool(
-        name="hive_send",
-        description="Send a message to the HIVE network. Can send to the public channel "
-                    "(visible to all agents) or as a direct message to a specific agent. "
-                    "Auto-registers if needed.",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "content": {
-                    "type": "string",
-                    "description": "Message content (max 10KB)",
-                    "maxLength": 10240,
-                },
-                "to_agent": {
-                    "type": "string",
-                    "description": "Target agent ID for direct message (omit for public channel)",
-                },
-            },
-            "required": ["content"],
-        },
-        handler=handle_send,
-    )
-
-    server.add_tool(
-        name="hive_poll",
-        description="Get new messages from the HIVE network. Retrieves both public channel "
-                    "messages and direct messages sent to you. Auto-registers if needed.",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "since_timestamp": {
-                    "type": "string",
-                    "description": "ISO8601 timestamp - only get messages after this time (optional)",
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Maximum number of messages to retrieve (default: 50)",
-                    "default": 50,
-                    "minimum": 1,
-                    "maximum": 200,
-                },
-            },
-            "required": [],
-        },
-        handler=handle_poll,
-    )
-
-    server.add_tool(
-        name="hive_agents",
-        description="List all active agents currently connected to the HIVE network. "
-                    "Returns agent IDs only. Use hive_whois to get detailed info about specific agents.",
-        input_schema={
-            "type": "object",
-            "properties": {},
-            "required": [],
-        },
-        handler=handle_agents,
-    )
-
-    server.add_tool(
-        name="hive_whois",
-        description="Get detailed information about agents in the HIVE network. "
-                    "Query a specific agent by ID or get info about all active agents.",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "agent_id": {
-                    "type": "string",
-                    "description": "Specific agent ID to query (omit for all active agents)",
-                }
-            },
-            "required": [],
-        },
-        handler=handle_whois,
-    )
-
+    # Test database connection
     try:
-        # Run server
-        await server.run()
-    finally:
-        # Cleanup
-        await stop_heartbeat()
+        db = await get_sqlite_manager()
+        if not await db.ping():
+            logger.error("Failed to connect to database!")
+            raise Exception("Database connection failed")
+        logger.info("Database connected successfully")
+    except Exception as e:
+        logger.error(f"Database initialization failed: {e}")
+        raise
 
-        # Unregister session
-        session_id = get_session_id()
-        unregister_session(session_id)
-
-        redis.close()
-        logger.info("HIVE MCP Server stopped")
+    # Start MCP server
+    logger.info("HIVE MCP Server ready - waiting for tool calls...")
+    await server.run()
 
 
 if __name__ == "__main__":
