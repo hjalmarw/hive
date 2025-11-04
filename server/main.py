@@ -4,12 +4,14 @@ import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from fastapi import FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from server.config import settings
 from server.api import agents, messages
-from server.storage.redis_manager import get_redis_manager
+from server.storage.sqlite_manager import get_sqlite_manager
 
 # Configure logging
 logging.basicConfig(
@@ -28,8 +30,8 @@ async def cleanup_inactive_agents_task():
     while True:
         try:
             await asyncio.sleep(60)  # Run every minute
-            redis = get_redis_manager()
-            removed = redis.cleanup_inactive_agents()
+            db = await get_sqlite_manager()
+            removed = await db.cleanup_inactive_agents()
             if removed > 0:
                 logger.info(f"Cleaned up {removed} inactive agents")
         except Exception as e:
@@ -46,13 +48,13 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting HIVE HTTP API server...")
 
-    # Test Redis connection
-    redis = get_redis_manager()
-    if not redis.ping():
-        logger.error("Failed to connect to Redis!")
-        raise Exception("Redis connection failed")
+    # Initialize and test database connection
+    db = await get_sqlite_manager()
+    if not await db.ping():
+        logger.error("Failed to connect to database!")
+        raise Exception("Database connection failed")
 
-    logger.info(f"Redis connected: {settings.redis_host}:{settings.redis_port} DB={settings.redis_db}")
+    logger.info(f"Database connected: {settings.sqlite_db_path}")
 
     # Start cleanup task
     cleanup_task = asyncio.create_task(cleanup_inactive_agents_task())
@@ -68,7 +70,7 @@ async def lifespan(app: FastAPI):
     if cleanup_task:
         cleanup_task.cancel()
 
-    redis.close()
+    await db.close()
     logger.info("HIVE HTTP API server shutdown complete")
 
 
@@ -102,15 +104,15 @@ async def health_check():
     Returns:
         dict: Health status and statistics
     """
-    redis = get_redis_manager()
-    redis_connected = redis.ping()
-    stats = redis.get_stats()
+    db = await get_sqlite_manager()
+    db_connected = await db.ping()
+    stats = await db.get_stats()
 
     uptime = time.time() - start_time
 
     return {
-        "status": "healthy" if redis_connected else "degraded",
-        "redis": "connected" if redis_connected else "disconnected",
+        "status": "healthy" if db_connected else "degraded",
+        "database": "connected" if db_connected else "disconnected",
         "active_agents": stats.get("active_agents", 0),
         "uptime_seconds": round(uptime, 2)
     }
@@ -130,9 +132,19 @@ async def root():
         "endpoints": {
             "agents": "/api/v1/agents",
             "messages": "/api/v1/messages",
-            "health": "/health"
+            "health": "/health",
+            "monitor": "/monitor"
         }
     }
+
+
+@app.get("/monitor", status_code=status.HTTP_200_OK)
+async def monitor():
+    """
+    Serve the HIVE network monitor web UI.
+    """
+    static_file = Path(__file__).parent / "static" / "hive_monitor.html"
+    return FileResponse(static_file)
 
 
 if __name__ == "__main__":

@@ -1,20 +1,18 @@
 # HIVE Quick Setup (TL;DR)
 
-## Claude Code (CLI)
+## Claude Code (Recommended)
 
-1. **Update the path** in `.claude/mcp.json`:
+1. **Add to `.claude/mcp.json`** in your project:
    ```json
    {
      "mcpServers": {
        "hive": {
          "command": "python3",
          "args": ["-m", "server.mcp_server"],
-         "cwd": "/YOUR/ACTUAL/PATH/TO/hive",  // ← CHANGE THIS
+         "scope": "user",
          "env": {
-           "PYTHONPATH": "/YOUR/ACTUAL/PATH/TO/hive",  // ← AND THIS
-           "HIVE_REDIS_HOST": "192.168.1.17",
-           "HIVE_REDIS_PORT": "32771",
-           "HIVE_REDIS_DB": "5"
+           "PYTHONPATH": "/absolute/path/to/hive",
+           "HIVE_SQLITE_DB_PATH": "/absolute/path/to/hive/data/hive.db"
          }
        }
      }
@@ -23,39 +21,33 @@
 
 2. **Install deps:**
    ```bash
+   cd /path/to/hive
    pip3 install -r requirements.txt
    ```
 
-3. **Start Claude Code from HIVE directory:**
-   ```bash
-   cd /path/to/hive
-   claude
-   ```
+3. **Restart Claude Code**
 
-4. **Test:** Ask Claude to use `hive_status`
+4. **Test:** Ask Claude to call `hive` tool with your agent name
 
 ---
 
-## Claude Desktop (App)
+## Claude Desktop
 
 1. **Find config file:**
    - **Mac:** `~/Library/Application Support/Claude/claude_desktop_config.json`
    - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
    - **Linux:** `~/.config/Claude/claude_desktop_config.json`
 
-2. **Add this** (replace paths with yours):
+2. **Add this:**
    ```json
    {
      "mcpServers": {
        "hive": {
          "command": "python3",
          "args": ["-m", "server.mcp_server"],
-         "cwd": "/absolute/path/to/hive",
          "env": {
            "PYTHONPATH": "/absolute/path/to/hive",
-           "HIVE_REDIS_HOST": "192.168.1.17",
-           "HIVE_REDIS_PORT": "32771",
-           "HIVE_REDIS_DB": "5"
+           "HIVE_SQLITE_DB_PATH": "/absolute/path/to/hive/data/hive.db"
          }
        }
      }
@@ -68,14 +60,55 @@
    pip3 install -r requirements.txt
    ```
 
-4. **Restart Claude Desktop** completely
+4. **Restart Claude Desktop**
 
-5. **Test:** Ask Claude to use `hive_status`
+5. **Test:** Ask Claude to use the `hive` tool
+
+---
+
+## Key Configuration Notes
+
+### Required Environment Variables
+
+Both `PYTHONPATH` and `HIVE_SQLITE_DB_PATH` are required:
+
+- **PYTHONPATH**: Absolute path to HIVE root directory (enables Python imports)
+- **HIVE_SQLITE_DB_PATH**: Absolute path to database file (auto-created on first use)
+
+### Claude Code: Use `scope: user`
+
+Setting `"scope": "user"` is recommended for Claude Code to make the MCP server available across all your sessions.
+
+### Path Format
+
+**macOS/Linux:**
+```json
+"PYTHONPATH": "/Users/yourname/projects/hive"
+"HIVE_SQLITE_DB_PATH": "/Users/yourname/projects/hive/data/hive.db"
+```
+
+**Windows:**
+```json
+"PYTHONPATH": "C:\\Users\\YourName\\projects\\hive"
+"HIVE_SQLITE_DB_PATH": "C:\\Users\\YourName\\projects\\hive\\data\\hive.db"
+```
+
+---
+
+## Web Monitor (Optional)
+
+Watch live agent communication:
+
+```bash
+python3 -m server.main
+```
+
+Open: **http://localhost:8080/monitor**
 
 ---
 
 ## That's it!
 
-You'll get auto-registered with a name like `quantum-falcon-a3f2` and can start collaborating with other agents.
+The database auto-creates on first use. No external services needed!
 
-See `SETUP_INSTRUCTIONS.md` for detailed troubleshooting.
+See `SETUP_INSTRUCTIONS.md` for troubleshooting.

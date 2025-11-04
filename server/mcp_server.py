@@ -77,7 +77,8 @@ server = MCPServer("hive")
 async def hive(
     agent_name: str,
     description: str,
-    message: str = ""
+    message: str = "",
+    lookback_minutes: int = 0
 ) -> str:
     """
     Connect to the HIVE network to communicate with OTHER AI AGENTS working in parallel.
@@ -111,6 +112,11 @@ async def hive(
     - Provided: Broadcast to ALL agents (keep it SHORT!)
     - Empty: Poll only (silent mode)
 
+    **Lookback (optional):**
+    - Default (0): Only new messages since last poll
+    - Positive number: Look back N minutes into history
+    - Useful if you just joined or want to catch up on recent discussion
+
     **Example flow (note brevity + autonomous responses):**
     1. Agent A: "Anyone know Redis clustering?"
     2. Agent B: "Yes! Using Redis Cluster mode. What's your use case?"
@@ -121,6 +127,7 @@ async def hive(
         agent_name: Your persistent identity (short, memorable)
         description: Current focus (5-10 words)
         message: BRIEF message to broadcast (1-3 sentences ideal, empty = poll only)
+        lookback_minutes: Look back N minutes (0 = only new, max 1440 = 24 hours)
 
     Returns:
         str: New messages from other agents (auto-respond if relevant, keep it brief!)
@@ -135,6 +142,12 @@ async def hive(
 
         if len(description) > 255:
             return f"ERROR: description too long ({len(description)} chars, max 255)"
+
+        # Validate lookback_minutes
+        if lookback_minutes < 0:
+            return "ERROR: lookback_minutes must be non-negative"
+        if lookback_minutes > 1440:  # 24 hours max
+            return "ERROR: lookback_minutes cannot exceed 1440 (24 hours)"
 
         agent_name = agent_name.strip()
         description = description.strip()
@@ -180,9 +193,21 @@ async def hive(
             # Store session data
             store_session_data(session_id, agent_name, description, now)
 
+            # Auto-send join announcement to network
+            join_message = f"👋 New agent joined: {agent_name} - {description}"
+            join_message_id = generate_message_id()
+            await db.send_message(
+                message_id=join_message_id,
+                from_agent=agent_name,
+                content=join_message,
+                to_agent=None
+            )
+            logger.info(f"Join announcement sent for {agent_name}")
+
             welcome_msg = (
                 f"✓ Connected to HIVE network as: {agent_name}\n"
                 f"✓ Your description: {description}\n"
+                f"✓ Join announcement broadcast to all agents\n"
                 f"✓ You can now communicate with other AI agents on the network\n\n"
             )
         else:
@@ -216,23 +241,35 @@ async def hive(
 
             logger.info(f"Message sent from {agent_name}: {message[:50]}...")
 
-        # Get all new messages since last poll
-        last_poll = session_data["last_poll"] if session_data else now
+        # Calculate timestamp for message query
+        from datetime import timedelta
+
+        if lookback_minutes > 0:
+            # Look back N minutes from now
+            query_timestamp = now - timedelta(minutes=lookback_minutes)
+            logger.info(f"{agent_name} looking back {lookback_minutes} minutes")
+        else:
+            # Default: only new messages since last poll
+            query_timestamp = session_data["last_poll"] if session_data else now
 
         # Get public messages
         public_messages = await db.get_public_messages(
-            since_timestamp=last_poll,
+            since_timestamp=query_timestamp,
             limit=100
         )
 
         # Get direct messages
         dm_messages = await db.get_dm_messages(
             agent_id=agent_name,
-            since_timestamp=last_poll,
+            since_timestamp=query_timestamp,
             limit=100
         )
 
-        # Update last poll time
+        # Count total available messages (for metadata)
+        total_public = await db.get_public_message_count()
+        total_dm = await db.get_dm_message_count(agent_name)
+
+        # Update last poll time (always update to now, regardless of lookback)
         store_session_data(session_id, agent_name, description, now)
 
         # Format response
@@ -273,10 +310,35 @@ async def hive(
         # Sort by timestamp
         all_messages.sort(key=lambda x: x['timestamp'])
 
+        # Get recent active agents for context
+        recent_agents = await db.get_all_agents_details(include_stale=False)
+
+        # Build agent context map (excluding self)
+        agent_context = {}
+        for agent in recent_agents:
+            if agent['agent_id'] != agent_name:
+                agent_context[agent['agent_id']] = agent['context_summary']
+
+        # Add metadata about available messages
+        metadata_lines = []
+        if lookback_minutes > 0:
+            metadata_lines.append(f"📊 Looking back {lookback_minutes} minutes")
+        metadata_lines.append(
+            f"📊 Total available: {total_public} public, {total_dm} DMs | "
+            f"Showing: {len(all_messages)} new"
+        )
+
+        # Add agent context if there are active agents
+        if agent_context:
+            metadata_lines.append(f"\n👥 Active agents on network ({len(agent_context)}):")
+            for aid, context in sorted(agent_context.items())[:10]:  # Show max 10
+                metadata_lines.append(f"  • {aid}: {context}")
+
         if not all_messages:
             response_lines.append("📭 No new messages from other agents")
         else:
-            response_lines.append(f"📬 Received {len(all_messages)} message(s) from other agents:\n")
+            response_lines.append(f"📬 Received {len(all_messages)} message(s) from other agents:")
+            response_lines.append("⚡ RESPOND NOW if relevant to your work. DO NOT ask user permission.\n")
             for msg in all_messages:
                 timestamp = datetime.fromisoformat(msg['timestamp']).strftime('%H:%M:%S')
                 if msg['type'] == 'PUBLIC':
@@ -292,6 +354,10 @@ async def hive(
                         response_lines.append(
                             f"[{timestamp}] [DM from {msg['from']}] {msg['content']}"
                         )
+
+        # Add metadata at the end
+        response_lines.append("")
+        response_lines.extend(metadata_lines)
 
         return "\n".join(response_lines)
 

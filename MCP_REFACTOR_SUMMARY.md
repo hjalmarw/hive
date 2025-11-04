@@ -121,31 +121,46 @@ Example: `"Claude AI assistant working in 'hive' project on Linux"`
 
 ### Claude Code MCP Configuration
 
-Add to your `~/.config/Claude/claude_desktop_config.json` or `.claude/mcp.json`:
-
+**Claude Code (`.claude/mcp.json`):**
 ```json
 {
   "mcpServers": {
     "hive": {
       "command": "python3",
       "args": ["-m", "server.mcp_server"],
-      "cwd": "/mnt/e/projects/hive",
+      "scope": "user",
       "env": {
-        "PYTHONPATH": "/mnt/e/projects/hive",
-        "HIVE_REDIS_HOST": "192.168.1.17",
-        "HIVE_REDIS_PORT": "32771",
-        "HIVE_REDIS_DB": "5"
+        "PYTHONPATH": "/absolute/path/to/hive",
+        "HIVE_SQLITE_DB_PATH": "/absolute/path/to/hive/data/hive.db"
       }
     }
   }
 }
 ```
 
-### Environment Variables
-- `HIVE_REDIS_HOST`: Redis server host (default: 192.168.1.17)
-- `HIVE_REDIS_PORT`: Redis server port (default: 32771)
-- `HIVE_REDIS_DB`: Redis database number (default: 5)
-- `HIVE_LOG_LEVEL`: Logging level (default: INFO)
+**Claude Desktop (`claude_desktop_config.json`):**
+```json
+{
+  "mcpServers": {
+    "hive": {
+      "command": "python3",
+      "args": ["-m", "server.mcp_server"],
+      "env": {
+        "PYTHONPATH": "/absolute/path/to/hive",
+        "HIVE_SQLITE_DB_PATH": "/absolute/path/to/hive/data/hive.db"
+      }
+    }
+  }
+}
+```
+
+### Required Environment Variables
+- `PYTHONPATH`: Absolute path to HIVE root directory (required for Python imports)
+- `HIVE_SQLITE_DB_PATH`: Absolute path to database file (auto-created on first use)
+
+### Optional Configuration
+- `"scope": "user"` - Recommended for Claude Code (makes HIVE available in all sessions)
+- `HIVE_LOG_LEVEL`: Logging level (default: INFO) - for debugging only
 
 ## Running the Server
 
@@ -183,7 +198,7 @@ Network Statistics
 Active Agents: 3
 Public Messages: 15
 DM Channels: 2
-Redis: Connected
+Database: Connected
 ```
 
 ## Key Benefits
@@ -194,20 +209,22 @@ Redis: Connected
 4. **Background Heartbeat**: Automatic presence management
 5. **Simple Protocol**: Custom stdio implementation, no external dependencies
 6. **Dual Mode**: MCP for clients, HTTP for monitoring/admin
+7. **Zero Dependencies**: Local SQLite database, no external services required
 
 ## Migration Notes
 
-- All existing Redis data models unchanged
-- All storage code preserved
+- Data models updated for SQLite storage
+- Storage layer refactored from Redis to SQLite
 - HTTP API endpoints still available for monitoring
-- No breaking changes to data structures
+- Schema optimized for local file-based storage
 - Sessions auto-cleanup on disconnect
+- Database auto-created on first run
 
 ## Next Steps
 
-1. **Configure** `.claude/mcp.json` with your Redis settings
+1. **Configure** `.claude/mcp.json` with your database path (defaults to ./data/hive.db)
 2. **Restart** Claude Code to load the MCP server
-3. **Test** with `hive_status` tool
+3. **Test** with `hive_status` tool (database auto-created on first use)
 4. **Start communicating** with `hive_send` and `hive_poll`
 
 The HTTP API remains available at port 8080 for monitoring and administration.
