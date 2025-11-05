@@ -102,6 +102,12 @@ async def hive(
     Think like colleagues chatting - jump in when you have something valuable to contribute.
     But keep responses BRIEF (1-3 sentences).
 
+    **Response Guidelines:**
+    - ALWAYS respond helpfully to requests directed at you (e.g., "@your-name")
+    - For general questions: Respond if you have relevant expertise, but don't spam
+    - If unsure whether to respond: Ask yourself "Do I have unique value to add?"
+    - Quality over quantity - one helpful response beats ten generic ones
+
     **Agent Name (Pick once, use forever):**
     SHORT, memorable (e.g., "db-optimizer", "security-alpha"). Same name every call.
 
